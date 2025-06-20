@@ -1,4 +1,4 @@
-package com.example.droneapp;
+package com.example.droneapp.utils;
 
 public class Utils {
     public static int bytes2int(byte[] bytes) {

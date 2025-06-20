@@ -1,4 +1,4 @@
-package com.example.droneapp;
+package com.example.droneapp.common;
 
 import android.content.Context;
 import android.hardware.input.InputManager;

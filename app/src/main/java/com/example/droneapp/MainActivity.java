@@ -1,14 +1,11 @@
 package com.example.droneapp;
 
-import android.content.Context;
 import android.content.Intent;
-import android.hardware.input.InputManager;
 import android.os.Bundle;
-import android.util.Log;
-import android.view.InputDevice;
-import android.view.MotionEvent;
-import android.widget.TextView;
+
 import androidx.appcompat.app.AppCompatActivity;
+
+import com.example.droneapp.crsf.JoystickMonitorActivity;
 
 public class MainActivity extends AppCompatActivity {
 
