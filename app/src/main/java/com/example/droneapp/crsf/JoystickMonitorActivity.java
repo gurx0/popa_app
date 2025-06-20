@@ -30,10 +30,11 @@ public class JoystickMonitorActivity extends AppCompatActivity {
     private static final int CRSF_CHANNEL_VALUE_1000 = 191;
     private static final int CRSF_CHANNEL_VALUE_2000 = 1792;
     private static final String[] CHANNEL_NAMES = {
-            "Throttle   ",     // CH1
-            "Yaw         ",     // CH2
-            "Pitch       ",     // CH3
-            "Roll         ",     // CH4
+
+            "Roll         ",     // CH1
+            "Pitch       ",     // CH2
+            "Yaw         ",     // CH3
+            "Throttle   ",     // CH4
             "E switch ",     // CH5
             "F switch ",     // CH6
             "A             ",     // CH7
@@ -154,18 +155,21 @@ public class JoystickMonitorActivity extends AppCompatActivity {
     private void received(byte[] datas) {
 //        Log.d("JoystickMonitor", "Received packet: " + bytesToHex(datas));
         if (datas.length < PACKAGE_HEADER_BUF.length + 2 || datas[PACKAGE_HEADER_BUF.length] != (byte) 0xB1) {
-//            Log.w("JoystickMonitor", "Invalid packet or header");
+            Log.w("JoystickMonitor", "Invalid packet or header");
             return;
         }
 
         byte length = datas[PACKAGE_HEADER_BUF.length + 1];
         int startIndex = PACKAGE_HEADER_BUF.length + 2;
 
+        int[] channelMap = {0, 1, 3, 2, 4, 5, 6, 7, 8, 9, 10, 11};
         for (int i = 0; i < length && i < NUM_CHANNELS * 2; i += 2) {
             int index = i / 2;
+            int mappedIndex = channelMap[index];
             int value = Utils.bytes2int(new byte[]{0, 0, datas[startIndex + i], datas[startIndex + i + 1]});
-            channels.values[index] = value;
-            setSeekBar(index, value);
+            channels.values[mappedIndex] = value;
+            setSeekBar(mappedIndex, value);
+            Log.d("JoystickMonitor", "Channel " + CHANNEL_NAMES[mappedIndex] + ": " + value);
         }
     }
 
@@ -182,9 +186,22 @@ public class JoystickMonitorActivity extends AppCompatActivity {
 
     private void sendCrsfPacket() {
         int[] channels_us = new int[16];
-        for (int i = 0; i < 16; i++) {
-            channels_us[i] = i < NUM_CHANNELS ? channels.values[i] : 1000;
+        channels_us[0] = channels.values[3]; // Roll (CH4 в UI)
+        channels_us[1] = channels.values[2]; // Pitch (CH3 в UI)
+        channels_us[2] = channels.values[1]; // Throttle (CH1 в UI)
+        channels_us[3] = channels.values[0]; // Yaw (CH2 в UI)
+        channels_us[4] = channels.values[4]; // E switch (CH5 в UI)
+        channels_us[5] = channels.values[5]; // F switch (CH6 в UI)
+        channels_us[6] = channels.values[6]; // A (CH7 в UI)
+        channels_us[7] = channels.values[7]; // B (CH8 в UI)
+        channels_us[8] = channels.values[8]; // C (CH9 в UI)
+        channels_us[9] = channels.values[9]; // D (CH10 в UI)
+        channels_us[10] = channels.values[10]; // G Roller (CH11 в UI)
+        channels_us[11] = channels.values[11]; // H Roller (CH12 в UI)
+        for (int i = 12; i < 16; i++) {
+            channels_us[i] = 1000;
         }
+
         byte[] payload = packChannels(channels_us);
         byte[] packet = new byte[payload.length + 4];
         packet[0] = (byte) CRSF_ADDRESS_FLIGHT_CONTROLLER;
