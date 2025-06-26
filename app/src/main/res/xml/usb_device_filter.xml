@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Общий фильтр для USB-UART преобразователей -->
+    <usb-device vendor-id="1027" />  <!-- FT232RL (0x0403) -->
+    <usb-device vendor-id="6790" />  <!-- CH340 (0x1A86) -->
+    <usb-device vendor-id="4292" />  <!-- CP2102 (0x10C4) -->
+    <usb-device vendor-id="3190" />  <!-- Новый ID: 0x0C76 -->
+    <!-- Можно добавить конкретные product-id если известны -->
+</resources>

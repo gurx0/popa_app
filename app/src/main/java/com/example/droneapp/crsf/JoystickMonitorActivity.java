@@ -1,6 +1,13 @@
 package com.example.droneapp.crsf;
 
 import android.annotation.SuppressLint;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbDeviceConnection;
+import android.hardware.usb.UsbManager;
 import android.os.Bundle;
 import android.util.Log;
 import android.widget.LinearLayout;
@@ -11,6 +18,9 @@ import androidx.appcompat.app.AppCompatActivity;
 import com.example.droneapp.R;
 import com.example.droneapp.crsf.Crc8;
 import com.example.droneapp.utils.Utils;
+import com.hoho.android.usbserial.driver.UsbSerialDriver;
+import com.hoho.android.usbserial.driver.UsbSerialPort;
+import com.hoho.android.usbserial.driver.UsbSerialProber;
 
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -21,7 +31,6 @@ import java.util.List;
 public class JoystickMonitorActivity extends AppCompatActivity {
     private static final byte[] PACKAGE_HEADER_BUF = "fengyingdianzi:".getBytes();
     private static final int NUM_CHANNELS = 12;
-    private static final String SERIAL_PORT = "/dev/ttyHS1";
     private static final int BAUD_RATE = 420000;
     private static final int SEEK_BAR_MIN = 1000;
     private static final int SEEK_BAR_MAX = 2000;
@@ -30,7 +39,6 @@ public class JoystickMonitorActivity extends AppCompatActivity {
     private static final int CRSF_CHANNEL_VALUE_1000 = 191;
     private static final int CRSF_CHANNEL_VALUE_2000 = 1792;
     private static final String[] CHANNEL_NAMES = {
-
             "Roll         ",     // CH1
             "Pitch       ",     // CH2
             "Yaw         ",     // CH3
@@ -45,16 +53,17 @@ public class JoystickMonitorActivity extends AppCompatActivity {
             "H Roller "      // CH12
     };
 
-
     private List<SeekBar> seekBarList = new ArrayList<>();
     private List<TextView> tvList = new ArrayList<>();
-    private FileInputStream inputStream;
-    private FileOutputStream outputStream;
     private Thread looperThread;
     private Thread readerThread;
     private volatile boolean isRunning = true;
     private Crc8 crc8;
     private Channels channels;
+    private UsbManager usbManager;
+    private UsbSerialPort usbSerialPort;
+    private static final String ACTION_USB_PERMISSION = "com.example.droneapp.USB_PERMISSION";
+    private static final int TIMEOUT = 1000;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -64,7 +73,7 @@ public class JoystickMonitorActivity extends AppCompatActivity {
         crc8 = new Crc8(0xD5);
         channels = new Channels();
         initUI();
-        initSerialPort();
+        initUsb();
     }
 
     private void initUI() {
@@ -84,14 +93,56 @@ public class JoystickMonitorActivity extends AppCompatActivity {
         }
     }
 
-    private void initSerialPort() {
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    private void initUsb() {
+        usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
+        
+        // Найдем все доступные драйверы USB-устройств
+        List<UsbSerialDriver> availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager);
+        if (availableDrivers.isEmpty()) {
+            Log.d("JoystickMonitor", "No USB serial devices found");
+            return;
+        }
+
+        // Открываем первое найденное устройство
+        UsbSerialDriver driver = availableDrivers.get(0);
+        UsbDevice device = driver.getDevice();
+
+        if (!usbManager.hasPermission(device)) {
+            PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 0, 
+                new Intent(ACTION_USB_PERMISSION), PendingIntent.FLAG_IMMUTABLE);
+            IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
+            registerReceiver(new android.content.BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    if (intent.getAction().equals(ACTION_USB_PERMISSION)) {
+                        if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
+                            connectToDevice(driver);
+                        }
+                    }
+                }
+            }, filter);
+            usbManager.requestPermission(device, permissionIntent);
+        } else {
+            connectToDevice(driver);
+        }
+    }
+
+    private void connectToDevice(UsbSerialDriver driver) {
+        UsbDeviceConnection connection = usbManager.openDevice(driver.getDevice());
+        if (connection == null) {
+            Log.e("JoystickMonitor", "Failed to open device");
+            return;
+        }
+
         try {
-            inputStream = new FileInputStream(SERIAL_PORT);
-            outputStream = new FileOutputStream(SERIAL_PORT);
+            usbSerialPort = driver.getPorts().get(0);
+            usbSerialPort.open(connection);
+            usbSerialPort.setParameters(BAUD_RATE, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE);
+            Log.d("JoystickMonitor", "Connected to USB device");
             startThreads();
         } catch (IOException e) {
-            Log.e("JoystickMonitor", "Serial port error: " + e.getMessage());
-            runOnUiThread(() -> tvList.get(0).setText("Ошибка: " + e.getMessage()));
+            Log.e("JoystickMonitor", "Error opening serial port: " + e.getMessage());
         }
     }
 
@@ -107,12 +158,11 @@ public class JoystickMonitorActivity extends AppCompatActivity {
 
             while (isRunning && !Thread.currentThread().isInterrupted()) {
                 try {
-                    if (outputStream != null) {
-                        outputStream.write(bArr);
-                        outputStream.flush();
-//                        Log.d("JoystickMonitor", "Sent request: " + bytesToHex(bArr));
+                    if (usbSerialPort != null) {
+                        usbSerialPort.write(bArr, TIMEOUT);
+                        Thread.sleep(5); // Дадим время устройству ответить
+                        sendCrsfPacket();
                     }
-                    sendCrsfPacket();
                     Thread.sleep(20);
                 } catch (IOException | InterruptedException e) {
                     Log.e("JoystickMonitor", "LooperThread error: " + e.getMessage());
@@ -125,19 +175,16 @@ public class JoystickMonitorActivity extends AppCompatActivity {
             byte[] buffer = new byte[256];
             while (isRunning && !Thread.currentThread().isInterrupted()) {
                 try {
-                    if (inputStream != null) {
-                        int len = inputStream.read(buffer);
+                    if (usbSerialPort != null) {
+                        int len = usbSerialPort.read(buffer, TIMEOUT);
                         if (len > 0) {
-//                            Log.d("JoystickMonitor", "Received " + len + " bytes: " + bytesToHex(buffer, len));
                             byte[] data = new byte[len];
                             System.arraycopy(buffer, 0, data, 0, len);
                             received(data);
-                        } else {
-                            Log.d("JoystickMonitor", "No data received from /dev/ttyHS1");
                         }
                     }
                 } catch (IOException e) {
-                    Log.e("JoystickMonitor", "IOException: " + e.getMessage());
+                    Log.e("JoystickMonitor", "ReaderThread error: " + e.getMessage());
                 }
             }
         });
@@ -153,7 +200,6 @@ public class JoystickMonitorActivity extends AppCompatActivity {
     }
 
     private void received(byte[] datas) {
-//        Log.d("JoystickMonitor", "Received packet: " + bytesToHex(datas));
         if (datas.length < PACKAGE_HEADER_BUF.length + 2 || datas[PACKAGE_HEADER_BUF.length] != (byte) 0xB1) {
             Log.w("JoystickMonitor", "Invalid packet or header");
             return;
@@ -176,7 +222,6 @@ public class JoystickMonitorActivity extends AppCompatActivity {
     private void setSeekBar(int index, int value) {
         value = Math.max(SEEK_BAR_MIN, Math.min(value, SEEK_BAR_MAX));
         int seekBarValue = value - SEEK_BAR_MIN;
-//        Log.d("JoystickMonitor", "SetSeekBar: index=" + index + ", value=" + value + ", seekBarValue=" + seekBarValue);
         int finalValue = value;
         runOnUiThread(() -> {
             seekBarList.get(index).setProgress(seekBarValue);
@@ -214,9 +259,8 @@ public class JoystickMonitorActivity extends AppCompatActivity {
         packet[packet.length - 1] = crc8.calc(crcData);
 
         try {
-            if (outputStream != null) {
-                outputStream.write(packet);
-                outputStream.flush();
+            if (usbSerialPort != null) {
+                usbSerialPort.write(packet, TIMEOUT);
                 Log.d("JoystickMonitor", "Sent CRSF packet: " + bytesToHex(packet));
             }
         } catch (IOException e) {
@@ -251,14 +295,6 @@ public class JoystickMonitorActivity extends AppCompatActivity {
         return sb.toString();
     }
 
-    private String bytesToHex(byte[] bytes, int length) {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < length; i++) {
-            sb.append(String.format("%02X ", bytes[i]));
-        }
-        return sb.toString();
-    }
-
     @Override
     protected void onDestroy() {
         super.onDestroy();
@@ -270,11 +306,8 @@ public class JoystickMonitorActivity extends AppCompatActivity {
             readerThread.interrupt();
         }
         try {
-            if (inputStream != null) {
-                inputStream.close();
-            }
-            if (outputStream != null) {
-                outputStream.close();
+            if (usbSerialPort != null) {
+                usbSerialPort.close();
             }
         } catch (IOException e) {
             Log.e("JoystickMonitor", "Close error: " + e.getMessage());
